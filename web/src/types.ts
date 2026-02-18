@@ -538,10 +538,14 @@ export interface IndicatorConfig {
   enable_volume: boolean;
   enable_oi: boolean;
   enable_funding_rate: boolean;
+  enable_kdj: boolean; // 新增：KDJ指标开关
+  enable_obv: boolean; // 新增：OBV指标开关
   ema_periods?: number[];
   rsi_periods?: number[];
   atr_periods?: number[];
   boll_periods?: number[];
+  kdj_periods?: number[]; // 新增：KDJ周期配置
+  obv_periods?: number[]; // 新增：OBV周期配置
   external_data_sources?: ExternalDataSource[];
 
   // ========== NofxOS 数据源统一配置 ==========
