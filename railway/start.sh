@@ -13,6 +13,12 @@ if [ -z "$DATA_ENCRYPTION_KEY" ]; then
     export DATA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 fi
 
+# 构建前端（确保最新代码）
+echo "🏗️ Building frontend..."
+cd /app/web || cd web
+npm install
+npm run build
+
 # 生成 nginx 配置
 cat > /etc/nginx/http.d/default.conf << NGINX_EOF
 server {
@@ -24,34 +30,32 @@ server {
     gzip_types text/plain text/css application/json application/javascript;
 
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files $uri $uri/ /index.html;
     }
 
     location /api/ {
         proxy_pass http://127.0.0.1:8081/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_connect_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location /health {
-        return 200 'OK';
-        add_header Content-Type text/plain;
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8081/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 NGINX_EOF
 
-# 启动后端（端口 8081）
-API_SERVER_PORT=8081 /app/nofx &
-sleep 2
+# 启动 nginx
+nginx -g "daemon off;" &
 
-# 启动 nginx（后台）
-nginx
-
-echo "✅ NOFX started successfully"
-
-# 保持容器运行
-tail -f /dev/null
+# 启动后端服务
+exec /app/nofx
