@@ -540,6 +540,26 @@ export interface IndicatorConfig {
   enable_funding_rate: boolean;
   enable_kdj: boolean; // 新增：KDJ指标开关
   enable_obv: boolean; // 新增：OBV指标开关
+
+  /** KDJ指标配置 (需与后端StrategyConfig.KDJ结构一致) */
+  kdj?: {
+    n_period: number;
+    k_period: number;
+    d_period: number;
+  };
+  
+  /** OBV指标配置 (需与后端StrategyConfig.OBV结构一致) */
+  obv?: {
+    enabled: boolean;
+  };
+  
+  /** MACD指标配置 (需与后端StrategyConfig.MACD结构一致) */
+  macd?: {
+    fast_period: number;
+    slow_period: number;
+    signal_period: number;
+  };
+
   ema_periods?: number[];
   rsi_periods?: number[];
   atr_periods?: number[];
@@ -829,3 +849,38 @@ export interface GridRiskInfo {
   breakout_level: string
   breakout_direction: string
 }
+
+export const DEFAULT_INDICATORS: IndicatorConfig = {
+  klines: {
+    primary_timeframe: '1h',
+    primary_count: 100,
+    longer_timeframe: '4h',
+    longer_count: 100,
+    enable_multi_timeframe: true,
+    selected_timeframes: ['1h', '4h']
+  },
+  enable_raw_klines: true,
+  enable_ema: true,
+  enable_macd: true,
+  enable_rsi: true,
+  enable_atr: true,
+  enable_boll: true,
+  enable_volume: true,
+  enable_oi: true,
+  enable_funding_rate: true,
+  enable_kdj: true,
+  enable_obv: true,
+  kdj: {
+    n_period: 9,
+    k_period: 3,
+    d_period: 3
+  },
+  obv: {
+    enabled: true
+  },
+  macd: {
+    fast_period: 12,
+    slow_period: 26,
+    signal_period: 9
+  }
+};

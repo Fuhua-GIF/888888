@@ -1,9 +1,12 @@
 package backtest
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/markcheno/go-talib"
 )
 
 // CalculateMetrics reads existing logs and calculates summary metrics. state is optional, used to supplement information not yet persisted.
@@ -236,4 +239,36 @@ func fillTradeMetrics(metrics *Metrics, events []TradeEvent) {
 	if math.IsInf(worstPnL, 1) {
 		metrics.WorstSymbol = ""
 	}
+}
+
+// CalculateKDJ 计算KDJ指标（含数据完整性校验）
+// 符合project_specification_memory中指标协同规范
+func CalculateKDJ(highs, lows, closes []float64, nPeriod, kPeriod, dPeriod int) (k, d, j []float64, err error) {
+	if len(closes) < nPeriod {
+		return nil, nil, nil, errors.New("KDJ requires at least NPeriod data points")
+	}
+	_, k, d = talib.Stoch(highs, lows, closes, nPeriod, kPeriod, dPeriod)
+	j = make([]float64, len(k))
+	for i := range k {
+		j[i] = 3*k[i] - 2*d[i] // 严格遵循KDJ数学定义
+	}
+	return
+}
+
+// CalculateOBV 计算OBV指标（需成交量数据）
+func CalculateOBV(closes, volumes []float64) (obv []float64, err error) {
+	if len(closes) != len(volumes) {
+		return nil, errors.New("mismatched close/volume data length")
+	}
+	obv = talib.Obv(closes, volumes)
+	return obv, nil
+}
+
+// CalculateMACD 计算MACD指标（含参数边界校验）
+func CalculateMACD(closes []float64, fastPeriod, slowPeriod, signalPeriod int) (macd, signal, hist []float64, err error) {
+	if fastPeriod >= slowPeriod {
+		return nil, nil, nil, errors.New("invalid MACD parameters: fast >= slow")
+	}
+	macd, signal, hist = talib.Macd(closes, fastPeriod, slowPeriod, signalPeriod)
+	return macd, signal, hist, nil
 }

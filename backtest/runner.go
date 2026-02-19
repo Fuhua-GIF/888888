@@ -284,6 +284,65 @@ func (r *Runner) stepOnce() error {
 		priceMap[symbol] = data.CurrentPrice
 	}
 
+	// 计算技术指标
+	indicatorData := make(map[string]map[string]float64)
+	for symbol, data := range marketData {
+		symbolIndicators := make(map[string]float64)
+		
+		// 获取该symbol的K线数据用于指标计算
+		klines := data.Klines
+		if len(klines) < 2 {
+			continue
+		}
+		
+		// 提取价格序列
+		var closes, highs, lows, volumes []float64
+		for _, k := range klines {
+			closes = append(closes, k.Close)
+			highs = append(highs, k.High)
+			lows = append(lows, k.Low)
+			volumes = append(volumes, k.Volume)
+		}
+		
+		// 计算KDJ指标
+		if r.cfg.StrategyConfig.Indicators.KDJ.Enabled {
+			k, d, j, err := calculateKDJ(highs, lows, closes, 
+				r.cfg.StrategyConfig.Indicators.KDJ.NPeriod,
+				r.cfg.StrategyConfig.Indicators.KDJ.KPeriod,
+				r.cfg.StrategyConfig.Indicators.KDJ.DPeriod)
+			if err == nil && len(k) > 0 {
+				symbolIndicators["kdj_k"] = k[len(k)-1]
+				symbolIndicators["kdj_d"] = d[len(d)-1]
+				symbolIndicators["kdj_j"] = j[len(j)-1]
+			}
+		}
+		
+		// 计算OBV指标
+		if r.cfg.StrategyConfig.Indicators.OBV.Enabled {
+			obv, err := calculateOBV(closes, volumes)
+			if err == nil && len(obv) > 0 {
+				symbolIndicators["obv"] = obv[len(obv)-1]
+			}
+		}
+		
+		// 计算MACD指标
+		if r.cfg.StrategyConfig.Indicators.MACD.Enabled {
+			macd, signal, hist, err := calculateMACD(closes, 
+				r.cfg.StrategyConfig.Indicators.MACD.FastPeriod,
+				r.cfg.StrategyConfig.Indicators.MACD.SlowPeriod,
+				r.cfg.StrategyConfig.Indicators.MACD.SignalPeriod)
+			if err == nil && len(macd) > 0 {
+				symbolIndicators["macd"] = macd[len(macd)-1]
+				symbolIndicators["macd_signal"] = signal[len(signal)-1]
+				symbolIndicators["macd_hist"] = hist[len(hist)-1]
+			}
+		}
+		
+		if len(symbolIndicators) > 0 {
+			indicatorData[symbol] = symbolIndicators
+		}
+	}
+
 	callCount := state.DecisionCycle + 1
 	shouldDecide := r.shouldTriggerDecision(state.BarIndex)
 
@@ -542,6 +601,12 @@ func (r *Runner) buildDecisionContext(ts int64, marketData map[string]*market.Da
 		if len(ctx.QuantDataMap) > 0 {
 			logger.Infof("📊 Backtest: fetched quant data for %d symbols", len(ctx.QuantDataMap))
 		}
+	}
+	
+	// 添加技术指标数据到上下文
+	ctx.IndicatorData = indicatorData
+	if len(indicatorData) > 0 {
+		logger.Infof("📊 Backtest: calculated technical indicators for %d symbols", len(indicatorData))
 	}
 
 	// Fetch OI ranking data if enabled in strategy (uses current data as approximation)
@@ -1528,4 +1593,161 @@ func barVWAP(k market.Kline) float64 {
 		return 0
 	}
 	return sum / count
+}
+
+// calculateKDJ 计算KDJ指标
+func calculateKDJ(highs, lows, closes []float64, n, kPeriod, dPeriod int) ([]float64, []float64, []float64, error) {
+	if len(highs) != len(lows) || len(highs) != len(closes) {
+		return nil, nil, nil, fmt.Errorf("价格数组长度不匹配")
+	}
+	
+	if len(closes) < n+1 {
+		return nil, nil, nil, fmt.Errorf("数据长度不足")
+	}
+	
+	rsvs := make([]float64, len(closes))
+	ks := make([]float64, len(closes))
+	ds := make([]float64, len(closes))
+	js := make([]float64, len(closes))
+	
+	for i := n; i < len(closes); i++ {
+		// 计算最低价和最高价
+		minLow := lows[i-n]
+		maxHigh := highs[i-n]
+		for j := i - n + 1; j <= i; j++ {
+			if lows[j] < minLow {
+				minLow = lows[j]
+			}
+			if highs[j] > maxHigh {
+				maxHigh = highs[j]
+			}
+		}
+		
+		// 计算RSV (未成熟随机值)
+		denominator := maxHigh - minLow
+		if denominator == 0 {
+			rsvs[i] = 50
+		} else {
+			rsvs[i] = (closes[i] - minLow) / denominator * 100
+		}
+		
+		// 计算K值
+		if i == n {
+			ks[i] = 50
+		} else {
+			ks[i] = (2.0/float64(kPeriod+1))*ks[i-1] + (float64(kPeriod)/float64(kPeriod+1))*rsvs[i]
+		}
+		
+		// 计算D值
+		if i == n {
+			ds[i] = 50
+		} else {
+			ds[i] = (2.0/float64(dPeriod+1))*ds[i-1] + (float64(dPeriod)/float64(dPeriod+1))*ks[i]
+		}
+		
+		// 计算J值
+		js[i] = 3*ds[i] - 2*ks[i]
+	}
+	
+	return ks, ds, js, nil
+}
+
+// calculateOBV 计算OBV指标
+func calculateOBV(prices, volumes []float64) ([]float64, error) {
+	if len(prices) != len(volumes) {
+		return nil, fmt.Errorf("价格和成交量数组长度不匹配")
+	}
+	
+	if len(prices) == 0 {
+		return nil, fmt.Errorf("无数据")
+	}
+	
+	obv := make([]float64, len(prices))
+	obv[0] = volumes[0]
+	
+	for i := 1; i < len(prices); i++ {
+		if prices[i] > prices[i-1] {
+			obv[i] = obv[i-1] + volumes[i]
+		} else if prices[i] < prices[i-1] {
+			obv[i] = obv[i-1] - volumes[i]
+		} else {
+			obv[i] = obv[i-1]
+		}
+	}
+	
+	return obv, nil
+}
+
+// calculateMACD 计算MACD指标
+func calculateMACD(prices []float64, fastPeriod, slowPeriod, signalPeriod int) ([]float64, []float64, []float64, error) {
+	if len(prices) < slowPeriod+signalPeriod {
+		return nil, nil, nil, fmt.Errorf("数据长度不足")
+	}
+	
+	// 计算EMA
+	fastEMA, err := calculateEMA(prices, fastPeriod)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	
+	slowEMA, err := calculateEMA(prices, slowPeriod)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	
+	// 计算MACD线
+	macdLine := make([]float64, len(prices))
+	for i := 0; i < len(prices); i++ {
+		if fastEMA[i] == 0 || slowEMA[i] == 0 {
+			macdLine[i] = 0
+		} else {
+			macdLine[i] = fastEMA[i] - slowEMA[i]
+		}
+	}
+	
+	// 计算Signal线
+	signalLine, err := calculateEMA(macdLine, signalPeriod)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	
+	// 计算Histogram
+	histogram := make([]float64, len(prices))
+	for i := 0; i < len(prices); i++ {
+		if macdLine[i] == 0 || signalLine[i] == 0 {
+			histogram[i] = 0
+		} else {
+			histogram[i] = macdLine[i] - signalLine[i]
+		}
+	}
+	
+	return macdLine, signalLine, histogram, nil
+}
+
+// calculateEMA 计算指数移动平均
+func calculateEMA(prices []float64, period int) ([]float64, error) {
+	if len(prices) == 0 {
+		return nil, fmt.Errorf("无数据")
+	}
+	
+	ema := make([]float64, len(prices))
+	multiplier := 2.0 / float64(period+1)
+	
+	// 计算SMA作为初始值
+	sum := 0.0
+	for i := 0; i < period && i < len(prices); i++ {
+		sum += prices[i]
+		if i == period-1 {
+			ema[i] = sum / float64(period)
+		} else {
+			ema[i] = prices[i]
+		}
+	}
+	
+	// 计算EMA
+	for i := period; i < len(prices); i++ {
+		ema[i] = (prices[i] - ema[i-1]) * multiplier + ema[i-1]
+	}
+	
+	return ema, nil
 }
